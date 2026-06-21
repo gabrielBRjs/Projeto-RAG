@@ -3,18 +3,22 @@ import os
 from langchain_community.document_loaders import PyPDFLoader
 from langchain_text_splitters import RecursiveCharacterTextSplitter
 from langchain_community.vectorstores import FAISS
-from langchain_google_genai import GoogleGenerativeAIEmbeddings, ChatGoogleGenerativeAI
-from langchain.chains import create_retrieval_chain
-from langchain.chains.combine_documents import create_stuff_documents_chain
+from langchain_community.embeddings import HuggingFaceEmbeddings
+from langchain_google_genai import ChatGoogleGenerativeAI
 from langchain_core.prompts import ChatPromptTemplate
+from langchain_core.runnables import RunnablePassthrough
+from langchain_core.output_parsers import StrOutputParser
 
-# CONFIGURAÇÃO DA CHAVE DA API
-# Substitua pelo seu token gerado no Google AI Studio
-os.environ["GOOGLE_API_KEY"] = "COLE_SUA_CHAVE_DO_GEMINI_AQUI"
+# CONFIGURAÇÃO DA CHAVE DA API (Apenas para o Chatbot responder)
+os.environ["GOOGLE_API_KEY"] = "SUA_CHAVE_AQUI"
 
 st.set_page_config(page_title="Chatbot Contestado - RAG", page_icon="📜")
 st.title("📜 Chatbot Inteligente - Guerra do Contestado")
 st.subheader("Base de Conhecimento RAG baseada na obra de Sebastião Luiz Alves")
+
+# Função auxiliar para formatar os documentos recuperados
+def formatar_docs(docs):
+    return "\n\n".join(doc.page_content for doc in docs)
 
 # 1. CARREGAMENTO E INDEXAÇÃO DO PDF (RAG - Etapa de Indexação)
 @st.cache_resource
@@ -28,42 +32,44 @@ def inicializar_sistema_rag():
     loader = PyPDFLoader(pdf_path)
     paginas = loader.load()
     
-    # Divide o texto em pedaços pequenos (Chunks) para facilitar a busca
+    # Divide o texto em pedaços pequenos (Chunks)
     text_splitter = RecursiveCharacterTextSplitter(chunk_size=1000, chunk_overlap=200)
     chunks = text_splitter.split_documents(paginas)
     
-    # Transforma os pedaços de texto em vetores (Embeddings) e salva no banco FAISS
-    embeddings = GoogleGenerativeAIEmbeddings(model="models/embedding-001")
+    # Usando SentenceTransformers local - Livre de erros de API 404!
+    embeddings = HuggingFaceEmbeddings(model_name="all-MiniLM-L6-v2")
     banco_vetores = FAISS.from_documents(chunks, embeddings)
     
-    # Retorna o buscador (Retriever) configurado para trazer os 3 trechos mais relevantes
+    # Retorna o buscador (Retriever) trazendo os 3 trechos mais relevantes
     return banco_vetores.as_retriever(search_kwargs={"k": 3})
 
 retriever = inicializar_sistema_rag()
 
 if retriever:
     # 2. CONFIGURAÇÃO DA IA E PROMPT ANTI-ALUCINAÇÃO (RAG - Recuperação e Geração)
-    # Temperatura zero garante que o modelo seja factual e não invente coisas
-    llm = ChatGoogleGenerativeAI(model="gemini-1.5-flash", temperature=0)
+    llm = ChatGoogleGenerativeAI(model="gemini-2.5-flash", temperature=0)
     
-    # Prompt rígido para cumprir a especificação de não alucinar fora do texto
     system_prompt = (
         "Você é um historiador virtual especialista na Guerra do Contestado.\n"
-        "Sua tarefa é responder à pergunta do usuário utilizando APENAS os trechos do livro fornecidos abaixo.\n"
-        "Se a informação não estiver descrita explicitamente no contexto abaixo, responda exatamente: "
-        "'Não sei. Esta informação não foi encontrada no documento fornecido.'\n"
-        "Nunca tente inventar fatos históricos ou complementar com conhecimento externo.\n\n"
+        "Sua tarefa é responder à pergunta do usuário baseando-se estritamente nos trechos do livro fornecidos abaixo.\n"
+        "Resuma as informações de forma clara e direta.\n"
+        "Se o contexto abaixo não trouxer nenhuma informação sobre o que foi perguntado, responda exatamente: "
+        "'Não sei. Esta informação não foi encontrada no documento fornecido.'\n\n"
         "Contexto:\n{context}"
     )
     
     prompt = ChatPromptTemplate.from_messages([
         ("system", system_prompt),
-        ("human", "{input}"),
+        ("human", "{question}"),
     ])
     
-    # Cria as esteiras (Chains) de execução do RAG
-    question_answer_chain = create_stuff_documents_chain(llm, prompt)
-    rag_chain = create_retrieval_chain(retriever, question_answer_chain)
+    # Construção da esteira RAG usando LCEL
+    rag_chain = (
+        {"context": retriever | formatar_docs, "question": RunnablePassthrough()}
+        | prompt
+        | llm
+        | StrOutputParser()
+    )
     
     # INTERFACE DO USUÁRIO (Streamlit)
     pergunta = st.text_input("Faça uma pergunta sobre a Guerra do Contestado:")
@@ -71,14 +77,14 @@ if retriever:
     if pergunta:
         with st.spinner("Pesquisando no livro do Contestado..."):
             # Executa a busca e gera a resposta
-            resposta = rag_chain.invoke({"input": pergunta})
+            resposta_texto = rag_chain.invoke(pergunta)
             
             st.markdown("### 🤖 Resposta:")
-            st.write(resposta["answer"])
+            st.write(resposta_texto)
             
-            # Mostra as fontes para provar ao professor que o RAG funcionou de verdade
+            # Recupera os documentos separadamente para mostrar as fontes ao professor
+            documentos_fontes = retriever.invoke(pergunta)
             with st.expander("📄 Trechos consultados no PDF (Fontes de Verdade):"):
-                for doc in resposta["context"]:
-                    # Soma 1 porque o índice da página no código começa em 0
+                for doc in documentos_fontes:
                     num_pagina = doc.metadata.get('page', 0) + 1
                     st.write(f"**Página {num_pagina}:** {doc.page_content}")
