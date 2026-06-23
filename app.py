@@ -10,7 +10,7 @@ from langchain_core.runnables import RunnablePassthrough
 from langchain_core.output_parsers import StrOutputParser
 
 # CONFIGURAÇÃO DA CHAVE DA API (Apenas para o Chatbot responder)
-os.environ["GOOGLE_API_KEY"] = "SUA_CHAVE_AQUI"
+os.environ["GOOGLE_API_KEY"] = "AQ.Ab8RN6KX9PcddmveFJbd6G9Qk6GZiXMCjm258X0tIT0N83rJ0Q"
 
 st.set_page_config(page_title="Chatbot Contestado - RAG", page_icon="📜")
 st.title("📜 Chatbot Inteligente - Guerra do Contestado")
